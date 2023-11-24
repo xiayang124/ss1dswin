@@ -14,18 +14,19 @@ import data_gen
 from config import get_config
 from dataset import get_dataset
 from method import SwinT
+from thop import profile
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 parser = argparse.ArgumentParser("HSI")
-parser.add_argument('--data', choices=['Indian', 'Pavia', 'Honghu'], default='Indian',
+parser.add_argument('--data', choices=['Indian', 'Pavia', 'Honghu'], default='Pavia',
                     help='data to use')
 parser.add_argument('--batch_size', type=int, default=64, help='number of batch size')
 parser.add_argument('--gpu_id', default='0', help='gpu id')
 parser.add_argument('--seed', type=int, default=0, help='number of seed')
 # -------------------------------------------------------------------------------
-parser.add_argument('--train_time', type=int, default=5)
+parser.add_argument('--train_time', type=int, default=3)
 parser.add_argument('--train_num', type=int and float, default=5)
-parser.add_argument('--epoch', type=int, default=3000)
+parser.add_argument('--epoch', type=int, default=30)
 
 args = parser.parse_args()
 
@@ -189,7 +190,8 @@ def accuracy(output, target, topk=(1,)):
     return res, target, pred.squeeze()
 
 
-def train_epoch(model, train_loader, valid_loader, criterion, lr_optimizer, optimizer, epochs):
+def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, epochs):
+    begin_train = time.time()
     for epoch in range(epochs):
         model.train()
         tic = time.time()
@@ -235,12 +237,21 @@ def train_epoch(model, train_loader, valid_loader, criterion, lr_optimizer, opti
             print("test, loss {}, use {} s, oa {:.6f}, aa {:.6f}, kappa {:.6f}".format(loss, per_epoch_time, OA2, AA_mean2, Kappa2))
 
             if epoch == epochs - 1:
+                end_train = time.time()
+                have_time = end_train - begin_train
+
+                random_flop_test = torch.randn(size=(batch_size, batch_data.shape[1], batch_data.shape[2])).cuda()
+                macs, params = profile(model, (random_flop_test, ))
+
                 save_loc = path + dataset_name + "_" + str(train_num) + "_" + str(times) + "_ss1d"
                 res = {
                     'oa': OA2 * 100,
                     'each_acc': str(AA2 * 100),
                     'aa': AA_mean2 * 100,
-                    'kappa': Kappa2 * 100
+                    'kappa': Kappa2 * 100,
+                    'macs': macs,
+                    'flop': macs * 2,
+                    'times': have_time
                 }
                 save_path_json = "%s.json" % save_loc
                 ss = json.dumps(res, indent=4)
@@ -248,6 +259,28 @@ def train_epoch(model, train_loader, valid_loader, criterion, lr_optimizer, opti
                     fout.write(ss)
                     fout.flush()
                 print("save record of %s done!" % save_loc)
+
+
+def test_eval(token, batch_size):
+    all_label = np.array([])
+    batch = 0
+    current_index = 0
+    if type(token) != torch.Tensor:
+        token = torch.from_numpy(token)
+    batch_num = token.shape[0]
+    while current_index + batch_size <= batch_num:
+        batch_data = token[current_index: current_index + batch_size, :, :]
+        batch_pred = model(batch_data.to(device))
+        pred = batch_pred.max(1)[1]
+        all_label = np.concatenate((all_label, pred.cpu().numpy()))
+        current_index = current_index + batch_size
+        if current_index + batch_size == batch_num:
+            break
+    batch_data = token[current_index:, :, :]
+    batch_pred = model(batch_data.to(device))
+    pred = batch_pred.max(1)[1]
+    all_label = np.concatenate((all_label, pred.cpu().numpy()))
+    return all_label, batch_data
 
 
 def output_metric(tar, pre):
@@ -302,6 +335,67 @@ if result_file_exists('./data/{}'.format(dataset_name), mat_file):
 data_gen.generate_data(dataset_name, train_num)
 print("All data had been generated!")
 
+TE, TR, input = get_dataset(dataset_name, train_num_or_rate=train_num)
+image_size, near_band, window_size = get_config(dataset_name)
+
+num_classes = np.max(TR)
+
+input_normalize = np.zeros(input.shape)
+
+for i in range(input.shape[2]):
+    input_max = np.max(input[:, :, i])
+    input_min = np.min(input[:, :, i])
+    input_normalize[:, :, i] = (input[:, :, i] - input_min) / (input_max - input_min)
+
+height, width, band = input.shape
+print("height={0},width={1},band={2}".format(height, width, band))
+
+
+def data_process():
+    total_pos_test, number_test = chooose_point(TE, num_classes)
+    total_pos_train, number_train = chooose_point(TR, num_classes)
+
+    init_line = np.linspace(0, height - 1, height, dtype=int).reshape(-1, 1)
+    init_row = np.linspace(0, width - 1, width, dtype=int).reshape(-1, 1)
+
+    lengths = np.repeat(init_line, width, axis=0)
+    rows = np.repeat(init_row, height, axis=1).reshape((-1, 1), order='F')
+    total_pos_all = np.concatenate((lengths, rows), axis=1)
+
+    mirror_image = mirror_hsi(height, width, band, input_normalize, image_size)
+    # ------------------------X TEST DATA--------------------------------
+    x_test_band = get_data(mirror_image, band, total_pos_test,
+                           patch=image_size,
+                           band_patch=near_band)
+    x_test = torch.from_numpy(x_test_band).type(torch.FloatTensor)
+    x_test = modify_data(x_test, image_size, near_band)
+    # ------------------------X TRAIN DATA-------------------------------
+    x_train_band = get_data(mirror_image, band, total_pos_train,
+                            patch=image_size,
+                            band_patch=near_band)
+    x_train = torch.from_numpy(x_train_band).type(torch.FloatTensor)
+    x_train = modify_data(x_train, image_size, near_band)
+    # ------------------------X ALL DATA---------------------------------
+    x_all_band = get_data(mirror_image, band, total_pos_all,
+                          patch=image_size,
+                          band_patch=near_band)
+    x_all = torch.from_numpy(x_all_band).type(torch.FloatTensor)
+    x_all = modify_data(x_all, image_size, near_band)
+    # -----------------------Y TRAIN DATA--------------------------------
+    y_train = get_label(number_train, num_classes)
+    y_train = torch.from_numpy(y_train).type(torch.LongTensor)
+    # -----------------------Y TEST DATA---------------------------------
+    y_test = get_label(number_test, num_classes)
+    y_test = torch.from_numpy(y_test).type(torch.LongTensor)
+    # ----------------------Make Datasets--------------------------------
+    Label_test = Data.TensorDataset(x_test, y_test)
+    Label_train = Data.TensorDataset(x_train, y_train)
+
+    label_test_loader = Data.DataLoader(Label_test, batch_size=batch_size, shuffle=True, num_workers=0)
+    label_train_loader = Data.DataLoader(Label_train, batch_size=batch_size, shuffle=False, num_workers=0)
+    return label_train_loader, label_test_loader, x_all
+
+
 for times in range(train_time):
     uniq_name = "{}_{}_{}_ss1d.json".format(dataset_name, train_num, times)
     if result_file_exists('./save_path', uniq_name):
@@ -309,6 +403,32 @@ for times in range(train_time):
         continue
     print("begin training {}".format(uniq_name))
 
+    label_train_loader, label_test_loader, x_all = data_process()
+
+    model = SwinT(image_size=image_size, near_band=near_band, num_patches=band,
+                  patch_dim=near_band * image_size ** 2, num_classes=num_classes, band=band, dim=64,
+                  heads=4, dropout=0.1, emb_dropout=0.1, window_size=window_size,
+                  )
+
+    model = model.to(device)
+
+    criterion = nn.CrossEntropyLoss().to(device)
+    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4, weight_decay=0)
+    lr_optimizer = torch.optim.lr_scheduler.StepLR(optimizer, step_size=300, gamma=0.9)
+
+    train_epoch(label_train_loader, label_test_loader, criterion, lr_optimizer, optimizer, epochs)
+
+    del label_test_loader, label_train_loader
+    all_label, batch_data = test_eval(x_all, batch_size)
+
+    all_label = all_label.reshape(TR.shape[0], TR.shape[1])
+    save_loc = "ss1d_save_npy/" + dataset_name + "_" + str(times) + "ss1d.pred"
+    save_path_pred = "%s.npy" % save_loc
+    np.save(save_path_pred, all_label)
+    del all_label, x_all, model
+
+
+def data_process():
     TE, TR, input = get_dataset(dataset_name, train_num_or_rate=train_num)
     image_size, near_band, window_size = get_config(dataset_name)
 
@@ -327,6 +447,13 @@ for times in range(train_time):
     total_pos_test, number_test = chooose_point(TE, num_classes)
     total_pos_train, number_train = chooose_point(TR, num_classes)
 
+    init_line = np.linspace(0, height - 1, height, dtype=int).reshape(-1, 1)
+    init_row = np.linspace(0, width - 1, width, dtype=int).reshape(-1, 1)
+
+    lengths = np.repeat(init_line, width, axis=0)
+    rows = np.repeat(init_row, height, axis=1).reshape((-1, 1), order='F')
+    total_pos_all = np.concatenate((lengths, rows), axis=1)
+
     mirror_image = mirror_hsi(height, width, band, input_normalize, image_size)
     # ------------------------X TEST DATA--------------------------------
     x_test_band = get_data(mirror_image, band, total_pos_test,
@@ -340,6 +467,12 @@ for times in range(train_time):
                             band_patch=near_band)
     x_train = torch.from_numpy(x_train_band).type(torch.FloatTensor)
     x_train = modify_data(x_train, image_size, near_band)
+    # ------------------------X ALL DATA---------------------------------
+    x_all_band = get_data(mirror_image, band, total_pos_all,
+                          patch=image_size,
+                          band_patch=near_band)
+    x_all = torch.from_numpy(x_all_band).type(torch.FloatTensor)
+    x_all = modify_data(x_all, image_size, near_band)
     # -----------------------Y TRAIN DATA--------------------------------
     y_train = get_label(number_train, num_classes)
     y_train = torch.from_numpy(y_train).type(torch.LongTensor)
@@ -352,16 +485,3 @@ for times in range(train_time):
 
     label_test_loader = Data.DataLoader(Label_test, batch_size=batch_size, shuffle=True, num_workers=0)
     label_train_loader = Data.DataLoader(Label_train, batch_size=batch_size, shuffle=False, num_workers=0)
-
-    model = SwinT(image_size=image_size, near_band=near_band, num_patches=band,
-                  patch_dim=near_band * image_size ** 2, num_classes=num_classes, band=band, dim=64,
-                  heads=4, dropout=0.1, emb_dropout=0.1, window_size=window_size,
-                  )
-
-    model = model.to(device)
-
-    criterion = nn.CrossEntropyLoss().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4, weight_decay=0)
-    lr_optimizer = torch.optim.lr_scheduler.StepLR(optimizer, step_size=300, gamma=0.9)
-
-    train_epoch(model, label_train_loader, label_test_loader, criterion, lr_optimizer, optimizer, epochs)
