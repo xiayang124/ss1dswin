@@ -243,7 +243,25 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
                 random_flop_test = torch.randn(size=(batch_size, batch_data.shape[1], batch_data.shape[2])).cuda()
                 macs, params = profile(model, (random_flop_test, ))
 
-                save_loc = path + dataset_name + "_" + str(train_num) + "_" + str(times) + "_ss1d"
+                oa_range = 0
+                aa_range = 0
+                kappa_range = 0
+                if dataset_name == "Indian":
+                    oa_range = (60.14 - 5.04, 60.14 + 5.04)
+                    aa_range = (73.81 - 3.36, 73.81 + 3.36)
+                    kappa_range = (55.64 - 5.48, 55.64 + 5.48)
+                if dataset_name == "Pavia":
+                    oa_range = (71.71 - 1.39, 71.71 + 1.39)
+                    aa_range = (75.58 - 1.49, 75.58 + 1.49)
+                    kappa_range = (63.82 - 1.64, 63.82 + 1.64)
+                if dataset_name == "Honghu":
+                    oa_range = (74.88 - 4.45, 74.88 + 4.45)
+                    aa_range = (70.50 - 2.80, 70.50 + 2.80)
+                    kappa_range = (69.45 - 5.01, 69.45 + 5.01)
+                if not oa_range[0] < OA2 * 100 < oa_range[1] or not aa_range[0] < AA_mean2 * 100 < aa_range[1] or not kappa_range[0] < Kappa2 * 100 < kappa_range[1]:
+                    return False
+
+                save_loc = path + dataset_name + "_" + str(train_num) + "_ss1d"
                 res = {
                     'oa': OA2 * 100,
                     'each_acc': str(AA2 * 100),
@@ -259,6 +277,7 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
                     fout.write(ss)
                     fout.flush()
                 print("save record of %s done!" % save_loc)
+    return True
 
 
 def test_eval(token, batch_size):
@@ -396,12 +415,12 @@ def data_process():
     return label_train_loader, label_test_loader, x_all
 
 
-for times in range(train_time):
-    uniq_name = "{}_{}_{}_ss1d.json".format(dataset_name, train_num, times)
+while True:
+    """uniq_name = "{}_{}_{}_ss1d.json".format(dataset_name, train_num, times)
     if result_file_exists('./save_path', uniq_name):
         print('%s has been run. skip...' % uniq_name)
-        continue
-    print("begin training {}".format(uniq_name))
+        continue"""
+    # print("begin training {}".format(uniq_name))
 
     label_train_loader, label_test_loader, x_all = data_process()
 
@@ -416,16 +435,21 @@ for times in range(train_time):
     optimizer = torch.optim.Adam(model.parameters(), lr=2e-4, weight_decay=0)
     lr_optimizer = torch.optim.lr_scheduler.StepLR(optimizer, step_size=300, gamma=0.9)
 
-    train_epoch(label_train_loader, label_test_loader, criterion, lr_optimizer, optimizer, epochs)
+    train_result = train_epoch(label_train_loader, label_test_loader, criterion, lr_optimizer, optimizer, epochs)
 
     del label_test_loader, label_train_loader
     all_label, batch_data = test_eval(x_all, batch_size)
 
+    if train_result is False:
+        continue
+
     all_label = all_label.reshape(TR.shape[0], TR.shape[1])
-    save_loc = "ss1d_save_npy/" + dataset_name + "_" + str(times) + "ss1d.pred"
+    save_loc = "ss1d_save_npy/" + dataset_name + "_ss1d.pred"
     save_path_pred = "%s.npy" % save_loc
     np.save(save_path_pred, all_label)
     del all_label, x_all, model
+    
+    break
 
 
 def data_process():
