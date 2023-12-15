@@ -191,7 +191,6 @@ def accuracy(output, target, topk=(1,)):
 
 
 def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, epochs):
-    begin_train = time.time()
     for epoch in range(epochs):
         model.train()
         tic = time.time()
@@ -237,9 +236,6 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
             print("test, loss {}, use {} s, oa {:.6f}, aa {:.6f}, kappa {:.6f}".format(loss, per_epoch_time, OA2, AA_mean2, Kappa2))
 
             if epoch == epochs - 1:
-                end_train = time.time()
-                have_time = end_train - begin_train
-
                 random_flop_test = torch.randn(size=(batch_size, batch_data.shape[1], batch_data.shape[2])).cuda()
                 macs, params = profile(model, (random_flop_test, ))
 
@@ -260,8 +256,6 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
                     kappa_range = (69.45 - 5.01, 69.45 + 5.01)
                 if not oa_range[0] < OA2 * 100 < oa_range[1] or not aa_range[0] < AA_mean2 * 100 < aa_range[1] or not kappa_range[0] < Kappa2 * 100 < kappa_range[1]:
                     return False
-
-                save_loc = path + dataset_name + "_" + str(train_num) + "_ss1d"
                 res = {
                     'oa': OA2 * 100,
                     'each_acc': str(AA2 * 100),
@@ -269,15 +263,8 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
                     'kappa': Kappa2 * 100,
                     'macs': macs,
                     'flop': macs * 2,
-                    'times': have_time
                 }
-                save_path_json = "%s.json" % save_loc
-                ss = json.dumps(res, indent=4)
-                with open(save_path_json, 'w') as fout:
-                    fout.write(ss)
-                    fout.flush()
-                print("save record of %s done!" % save_loc)
-    return True
+    return res
 
 
 def test_eval(token, batch_size):
@@ -287,6 +274,7 @@ def test_eval(token, batch_size):
     if type(token) != torch.Tensor:
         token = torch.from_numpy(token)
     batch_num = token.shape[0]
+    begin_time = round(time.time() * 1000)
     while current_index + batch_size <= batch_num:
         batch_data = token[current_index: current_index + batch_size, :, :]
         batch_pred = model(batch_data.to(device))
@@ -297,9 +285,10 @@ def test_eval(token, batch_size):
             break
     batch_data = token[current_index:, :, :]
     batch_pred = model(batch_data.to(device))
+    end_time = round(time.time() * 1000)
     pred = batch_pred.max(1)[1]
     all_label = np.concatenate((all_label, pred.cpu().numpy()))
-    return all_label, batch_data
+    return all_label, batch_data, end_time - begin_time
 
 
 def output_metric(tar, pre):
@@ -438,16 +427,24 @@ while True:
     train_result = train_epoch(label_train_loader, label_test_loader, criterion, lr_optimizer, optimizer, epochs)
 
     del label_test_loader, label_train_loader
-    all_label, batch_data = test_eval(x_all, batch_size)
-
     if train_result is False:
         continue
 
+    all_label, _, time = test_eval(x_all, batch_size)
+    train_result['times'] = time
     all_label = all_label.reshape(TR.shape[0], TR.shape[1])
     save_loc = "ss1d_save_npy/" + dataset_name + "_ss1d.pred"
     save_path_pred = "%s.npy" % save_loc
     np.save(save_path_pred, all_label)
     del all_label, x_all, model
+
+    save_loc = path + dataset_name + "_" + str(train_num) + "_ss1d"
+    save_path_json = "%s.json" % save_loc
+    ss = json.dumps(train_result, indent=4)
+    with open(save_path_json, 'w') as fout:
+        fout.write(ss)
+        fout.flush()
+    print("save record of %s done!" % save_loc)
     
     break
 
