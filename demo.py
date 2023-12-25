@@ -358,51 +358,34 @@ for i in range(input.shape[2]):
 height, width, band = input.shape
 print("height={0},width={1},band={2}".format(height, width, band))
 
+total_pos_test, number_test = chooose_point(TE, num_classes)
+total_pos_train, number_train = chooose_point(TR, num_classes)
 
-def data_process():
-    total_pos_test, number_test = chooose_point(TE, num_classes)
-    total_pos_train, number_train = chooose_point(TR, num_classes)
+mirror_image = mirror_hsi(height, width, band, input_normalize, image_size)
+# ------------------------X TEST DATA--------------------------------
+x_test_band = get_data(mirror_image, band, total_pos_test,
+                       patch=image_size,
+                       band_patch=near_band)
+x_test = torch.from_numpy(x_test_band).type(torch.FloatTensor)
+x_test = modify_data(x_test, image_size, near_band)
+# ------------------------X TRAIN DATA-------------------------------
+x_train_band = get_data(mirror_image, band, total_pos_train,
+                        patch=image_size,
+                        band_patch=near_band)
+x_train = torch.from_numpy(x_train_band).type(torch.FloatTensor)
+x_train = modify_data(x_train, image_size, near_band)
+# -----------------------Y TRAIN DATA--------------------------------
+y_train = get_label(number_train, num_classes)
+y_train = torch.from_numpy(y_train).type(torch.LongTensor)
+# -----------------------Y TEST DATA---------------------------------
+y_test = get_label(number_test, num_classes)
+y_test = torch.from_numpy(y_test).type(torch.LongTensor)
+# ----------------------Make Datasets--------------------------------
+Label_test = Data.TensorDataset(x_test, y_test)
+Label_train = Data.TensorDataset(x_train, y_train)
 
-    init_line = np.linspace(0, height - 1, height, dtype=int).reshape(-1, 1)
-    init_row = np.linspace(0, width - 1, width, dtype=int).reshape(-1, 1)
-
-    lengths = np.repeat(init_line, width, axis=0)
-    rows = np.repeat(init_row, height, axis=1).reshape((-1, 1), order='F')
-    total_pos_all = np.concatenate((lengths, rows), axis=1)
-
-    mirror_image = mirror_hsi(height, width, band, input_normalize, image_size)
-    # ------------------------X TEST DATA--------------------------------
-    x_test_band = get_data(mirror_image, band, total_pos_test,
-                           patch=image_size,
-                           band_patch=near_band)
-    x_test = torch.from_numpy(x_test_band).type(torch.FloatTensor)
-    x_test = modify_data(x_test, image_size, near_band)
-    # ------------------------X TRAIN DATA-------------------------------
-    x_train_band = get_data(mirror_image, band, total_pos_train,
-                            patch=image_size,
-                            band_patch=near_band)
-    x_train = torch.from_numpy(x_train_band).type(torch.FloatTensor)
-    x_train = modify_data(x_train, image_size, near_band)
-    # ------------------------X ALL DATA---------------------------------
-    x_all_band = get_data(mirror_image, band, total_pos_all,
-                          patch=image_size,
-                          band_patch=near_band)
-    x_all = torch.from_numpy(x_all_band).type(torch.FloatTensor)
-    x_all = modify_data(x_all, image_size, near_band)
-    # -----------------------Y TRAIN DATA--------------------------------
-    y_train = get_label(number_train, num_classes)
-    y_train = torch.from_numpy(y_train).type(torch.LongTensor)
-    # -----------------------Y TEST DATA---------------------------------
-    y_test = get_label(number_test, num_classes)
-    y_test = torch.from_numpy(y_test).type(torch.LongTensor)
-    # ----------------------Make Datasets--------------------------------
-    Label_test = Data.TensorDataset(x_test, y_test)
-    Label_train = Data.TensorDataset(x_train, y_train)
-
-    label_test_loader = Data.DataLoader(Label_test, batch_size=batch_size, shuffle=True, num_workers=0)
-    label_train_loader = Data.DataLoader(Label_train, batch_size=batch_size, shuffle=False, num_workers=0)
-    return label_train_loader, label_test_loader, x_all
-
+label_test_loader = Data.DataLoader(Label_test, batch_size=batch_size, shuffle=True, num_workers=0)
+label_train_loader = Data.DataLoader(Label_train, batch_size=batch_size, shuffle=False, num_workers=0)
 
 while True:
     """uniq_name = "{}_{}_{}_ss1d.json".format(dataset_name, train_num, times)
@@ -410,9 +393,6 @@ while True:
         print('%s has been run. skip...' % uniq_name)
         continue"""
     # print("begin training {}".format(uniq_name))
-
-    label_train_loader, label_test_loader, x_all = data_process()
-
     model = SwinT(image_size=image_size, near_band=near_band, num_patches=band,
                   patch_dim=near_band * image_size ** 2, num_classes=num_classes, band=band, dim=64,
                   heads=4, dropout=0.1, emb_dropout=0.1, window_size=window_size,
@@ -425,12 +405,27 @@ while True:
     lr_optimizer = torch.optim.lr_scheduler.StepLR(optimizer, step_size=300, gamma=0.9)
 
     train_result = train_epoch(label_train_loader, label_test_loader, criterion, lr_optimizer, optimizer, epochs)
-
-    del label_test_loader, label_train_loader
     if train_result is False:
         continue
+    del label_test_loader, label_train_loader, x_test, x_train, y_train, y_test
+    # ------------------------X ALL DATA---------------------------------
+    init_line = np.linspace(0, height - 1, height, dtype=int).reshape(-1, 1)
+    init_row = np.linspace(0, width - 1, width, dtype=int).reshape(-1, 1)
+
+    lengths = np.repeat(init_line, width, axis=0)
+    rows = np.repeat(init_row, height, axis=1).reshape((-1, 1), order='F')
+
+    total_pos_all = np.concatenate((lengths, rows), axis=1)
+
+    x_all_band = get_data(mirror_image, band, total_pos_all,
+                          patch=image_size,
+                          band_patch=near_band)
+    del mirror_image
+    x_all = torch.from_numpy(x_all_band).type(torch.FloatTensor)
+    x_all = modify_data(x_all, image_size, near_band)
 
     all_label, _, time = test_eval(x_all, batch_size)
+
     train_result['times'] = time
     all_label = all_label.reshape(TR.shape[0], TR.shape[1])
     save_loc = "ss1d_save_npy/" + dataset_name + "_ss1d.pred"
@@ -447,62 +442,3 @@ while True:
     print("save record of %s done!" % save_loc)
     
     break
-
-
-def data_process():
-    TE, TR, input = get_dataset(dataset_name, train_num_or_rate=train_num)
-    image_size, near_band, window_size = get_config(dataset_name)
-
-    num_classes = np.max(TR)
-
-    input_normalize = np.zeros(input.shape)
-
-    for i in range(input.shape[2]):
-        input_max = np.max(input[:, :, i])
-        input_min = np.min(input[:, :, i])
-        input_normalize[:, :, i] = (input[:, :, i] - input_min) / (input_max - input_min)
-
-    height, width, band = input.shape
-    print("height={0},width={1},band={2}".format(height, width, band))
-
-    total_pos_test, number_test = chooose_point(TE, num_classes)
-    total_pos_train, number_train = chooose_point(TR, num_classes)
-
-    init_line = np.linspace(0, height - 1, height, dtype=int).reshape(-1, 1)
-    init_row = np.linspace(0, width - 1, width, dtype=int).reshape(-1, 1)
-
-    lengths = np.repeat(init_line, width, axis=0)
-    rows = np.repeat(init_row, height, axis=1).reshape((-1, 1), order='F')
-    total_pos_all = np.concatenate((lengths, rows), axis=1)
-
-    mirror_image = mirror_hsi(height, width, band, input_normalize, image_size)
-    # ------------------------X TEST DATA--------------------------------
-    x_test_band = get_data(mirror_image, band, total_pos_test,
-                           patch=image_size,
-                           band_patch=near_band)
-    x_test = torch.from_numpy(x_test_band).type(torch.FloatTensor)
-    x_test = modify_data(x_test, image_size, near_band)
-    # ------------------------X TRAIN DATA-------------------------------
-    x_train_band = get_data(mirror_image, band, total_pos_train,
-                            patch=image_size,
-                            band_patch=near_band)
-    x_train = torch.from_numpy(x_train_band).type(torch.FloatTensor)
-    x_train = modify_data(x_train, image_size, near_band)
-    # ------------------------X ALL DATA---------------------------------
-    x_all_band = get_data(mirror_image, band, total_pos_all,
-                          patch=image_size,
-                          band_patch=near_band)
-    x_all = torch.from_numpy(x_all_band).type(torch.FloatTensor)
-    x_all = modify_data(x_all, image_size, near_band)
-    # -----------------------Y TRAIN DATA--------------------------------
-    y_train = get_label(number_train, num_classes)
-    y_train = torch.from_numpy(y_train).type(torch.LongTensor)
-    # -----------------------Y TEST DATA---------------------------------
-    y_test = get_label(number_test, num_classes)
-    y_test = torch.from_numpy(y_test).type(torch.LongTensor)
-    # ----------------------Make Datasets--------------------------------
-    Label_test = Data.TensorDataset(x_test, y_test)
-    Label_train = Data.TensorDataset(x_train, y_train)
-
-    label_test_loader = Data.DataLoader(Label_test, batch_size=batch_size, shuffle=True, num_workers=0)
-    label_train_loader = Data.DataLoader(Label_train, batch_size=batch_size, shuffle=False, num_workers=0)
