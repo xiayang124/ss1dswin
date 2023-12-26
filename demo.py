@@ -25,7 +25,7 @@ parser.add_argument('--gpu_id', default='0', help='gpu id')
 parser.add_argument('--seed', type=int, default=0, help='number of seed')
 # -------------------------------------------------------------------------------
 parser.add_argument('--train_time', type=int, default=3)
-parser.add_argument('--train_num', type=int and float, default=5)
+parser.add_argument('--train_num', type=int and float, default=10)
 parser.add_argument('--epoch', type=int, default=100)
 
 args = parser.parse_args()
@@ -138,12 +138,12 @@ def get_data(mirror_image, band, test_point, patch=5, band_patch=3):
 
     for j in range(test_point.shape[0]):
         x_test[j, :, :, :] = gain_neighborhood_pixel(mirror_image, test_point, j, patch)
-    print("x_test  shape = {}, type = {}".format(x_test.shape, x_test.dtype))
-    print("**************************************************")
+    # print("x_test  shape = {}, type = {}".format(x_test.shape, x_test.dtype))
+    # print("**************************************************")
 
     x_test_band = gain_neighborhood_band_mirror(x_test, band, band_patch, patch)
-    print("x_test_band  shape = {}, type = {}".format(x_test_band.shape, x_test_band.dtype))
-    print("**************************************************")
+    # print("x_test_band  shape = {}, type = {}".format(x_test_band.shape, x_test_band.dtype))
+    # print("**************************************************")
     return x_test_band
 
 
@@ -233,11 +233,12 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
                 tar = np.append(tar, t.data.cpu().numpy())
                 pre = np.append(pre, p.data.cpu().numpy())
             OA2, AA_mean2, Kappa2, AA2 = output_metric(tar, pre)
-            print("test, loss {}, use {} s, oa {:.6f}, aa {:.6f}, kappa {:.6f}".format(loss, per_epoch_time, OA2, AA_mean2, Kappa2))
+            print("test, loss {}, use {} s, oa {:.6f}, aa {:.6f}, kappa {:.6f}".format(loss, per_epoch_time, OA2,
+                                                                                       AA_mean2, Kappa2))
 
             if epoch == epochs - 1:
                 random_flop_test = torch.randn(size=(batch_size, batch_data.shape[1], batch_data.shape[2])).cuda()
-                macs, params = profile(model, (random_flop_test, ))
+                macs, params = profile(model, (random_flop_test,))
 
                 oa_range = 0
                 aa_range = 0
@@ -254,8 +255,8 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
                     oa_range = (74.88 - 4.45, 74.88 + 4.45)
                     aa_range = (70.50 - 2.80, 70.50 + 2.80)
                     kappa_range = (69.45 - 5.01, 69.45 + 5.01)
-                if not oa_range[0] < OA2 * 100 < oa_range[1] or not aa_range[0] < AA_mean2 * 100 < aa_range[1] or not kappa_range[0] < Kappa2 * 100 < kappa_range[1]:
-                    return False
+                # if not oa_range[0] < OA2 * 100 < oa_range[1] or not aa_range[0] < AA_mean2 * 100 < aa_range[1] or not kappa_range[0] < Kappa2 * 100 < kappa_range[1]:
+                #     return False
                 res = {
                     'oa': OA2 * 100,
                     'each_acc': str(AA2 * 100),
@@ -268,13 +269,16 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
 
 
 def test_eval(batch_size, mirror_image, band, total_pos_all, image_size, near_band):
+    print("Begin Result Image Making.")
     all_label = np.array([])
-    current_index = 0
     batch_num = total_pos_all.shape[0]
     begin_time = round(time.time() * 1000)
-    while current_index + batch_size <= batch_num:
-        current_pos = total_pos_all[current_index: current_index + batch_size, :]
-        token = get_data(mirror_image, band, total_pos_all, patch=image_size, band_patch=near_band)
+    batch_index = batch_num // batch_size
+    for batchs in range(batch_index):
+        current_pos = total_pos_all[batchs * batch_size: (batchs + 1) * batch_size, :]
+        token = get_data(mirror_image, band, current_pos, patch=image_size, band_patch=near_band)
+        token = torch.from_numpy(token).type(torch.FloatTensor)
+        token = modify_data(token, image_size, near_band)
         if type(token) != torch.Tensor:
             token = torch.from_numpy(token)
 
@@ -282,14 +286,19 @@ def test_eval(batch_size, mirror_image, band, total_pos_all, image_size, near_ba
         batch_pred = model(batch_data)
         pred = batch_pred.max(1)[1]
         all_label = np.concatenate((all_label, pred.cpu().numpy()))
-        current_index = current_index + batch_size
-        if current_index + batch_size == batch_num:
-            break
-    batch_data = token[current_index:, :, :]
-    batch_pred = model(batch_data.to(device))
+    if batch_index * batch_size != batch_num:
+        current_pos = total_pos_all[batch_index * batch_size:, :]
+        token = get_data(mirror_image, band, current_pos, patch=image_size, band_patch=near_band)
+        token = torch.from_numpy(token).type(torch.FloatTensor)
+        token = modify_data(token, image_size, near_band)
+        if type(token) != torch.Tensor:
+            token = torch.from_numpy(token)
+
+        batch_data = token.to(device)
+        batch_pred = model(batch_data)
+        pred = batch_pred.max(1)[1]
+        all_label = np.concatenate((all_label, pred.cpu().numpy()))
     end_time = round(time.time() * 1000)
-    pred = batch_pred.max(1)[1]
-    all_label = np.concatenate((all_label, pred.cpu().numpy()))
     return all_label, batch_data, end_time - begin_time
 
 
@@ -435,5 +444,5 @@ while True:
         fout.write(ss)
         fout.flush()
     print("save record of %s done!" % save_loc)
-    
+
     break
