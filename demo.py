@@ -18,7 +18,7 @@ from thop import profile
 
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 parser = argparse.ArgumentParser("HSI")
-parser.add_argument('--data', choices=['Indian', 'Pavia', 'Honghu'], default='Pavia',
+parser.add_argument('--data', choices=['Indian', 'Pavia', 'Honghu'], default='Indian',
                     help='data to use')
 parser.add_argument('--batch_size', type=int, default=64, help='number of batch size')
 parser.add_argument('--gpu_id', default='0', help='gpu id')
@@ -26,7 +26,7 @@ parser.add_argument('--seed', type=int, default=0, help='number of seed')
 # -------------------------------------------------------------------------------
 parser.add_argument('--train_time', type=int, default=3)
 parser.add_argument('--train_num', type=int and float, default=5)
-parser.add_argument('--epoch', type=int, default=30)
+parser.add_argument('--epoch', type=int, default=100)
 
 args = parser.parse_args()
 
@@ -267,17 +267,19 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
     return res
 
 
-def test_eval(token, batch_size):
+def test_eval(batch_size, mirror_image, band, total_pos_all, image_size, near_band):
     all_label = np.array([])
-    batch = 0
     current_index = 0
-    if type(token) != torch.Tensor:
-        token = torch.from_numpy(token)
-    batch_num = token.shape[0]
+    batch_num = total_pos_all.shape[0]
     begin_time = round(time.time() * 1000)
     while current_index + batch_size <= batch_num:
-        batch_data = token[current_index: current_index + batch_size, :, :]
-        batch_pred = model(batch_data.to(device))
+        current_pos = total_pos_all[current_index: current_index + batch_size, :]
+        token = get_data(mirror_image, band, total_pos_all, patch=image_size, band_patch=near_band)
+        if type(token) != torch.Tensor:
+            token = torch.from_numpy(token)
+
+        batch_data = token.to(device)
+        batch_pred = model(batch_data)
         pred = batch_pred.max(1)[1]
         all_label = np.concatenate((all_label, pred.cpu().numpy()))
         current_index = current_index + batch_size
@@ -417,21 +419,14 @@ while True:
 
     total_pos_all = np.concatenate((lengths, rows), axis=1)
 
-    x_all_band = get_data(mirror_image, band, total_pos_all,
-                          patch=image_size,
-                          band_patch=near_band)
-    del mirror_image
-    x_all = torch.from_numpy(x_all_band).type(torch.FloatTensor)
-    x_all = modify_data(x_all, image_size, near_band)
-
-    all_label, _, time = test_eval(x_all, batch_size)
+    all_label, _, time = test_eval(batch_size, mirror_image, band, total_pos_all, image_size, near_band)
 
     train_result['times'] = time
     all_label = all_label.reshape(TR.shape[0], TR.shape[1])
     save_loc = "ss1d_save_npy/" + dataset_name + "_ss1d.pred"
     save_path_pred = "%s.npy" % save_loc
     np.save(save_path_pred, all_label)
-    del all_label, x_all, model
+    del all_label, model
 
     save_loc = path + dataset_name + "_" + str(train_num) + "_ss1d"
     save_path_json = "%s.json" % save_loc
