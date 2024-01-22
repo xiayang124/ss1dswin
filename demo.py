@@ -8,6 +8,7 @@ import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
 import torch.utils.data as Data
+import torch.optim as optim
 from sklearn.metrics import confusion_matrix
 
 import data_gen
@@ -396,7 +397,7 @@ Label_test = Data.TensorDataset(x_test, y_test)
 Label_train = Data.TensorDataset(x_train, y_train)
 
 label_test_loader = Data.DataLoader(Label_test, batch_size=batch_size, shuffle=True, num_workers=0)
-label_train_loader = Data.DataLoader(Label_train, batch_size=batch_size, shuffle=False, num_workers=0)
+label_train_loader = Data.DataLoader(Label_train, batch_size=batch_size, shuffle=True, num_workers=0)
 
 for train_times in range(train_time):
     uniq_name = "{}_{}_{}_ss1d.json".format(dataset_name, int(train_num), train_times)
@@ -412,13 +413,12 @@ for train_times in range(train_time):
     model = model.to(device)
 
     criterion = nn.CrossEntropyLoss().to(device)
-    optimizer = torch.optim.Adam(model.parameters(), lr=2e-4, weight_decay=0)
+    optimizer = optim.Adam(model.parameters(), lr=2e-4)
     lr_optimizer = torch.optim.lr_scheduler.StepLR(optimizer, step_size=300, gamma=0.9)
 
     train_result = train_epoch(label_train_loader, label_test_loader, criterion, lr_optimizer, optimizer, epochs)
-    if train_result is False:
-        continue
-    del label_test_loader, label_train_loader, x_test, x_train, y_train, y_test
+    # if train_result is False:
+    #     continue
     # ------------------------X ALL DATA---------------------------------
     init_line = np.linspace(0, height - 1, height, dtype=int).reshape(-1, 1)
     init_row = np.linspace(0, width - 1, width, dtype=int).reshape(-1, 1)
@@ -430,7 +430,7 @@ for train_times in range(train_time):
 
     # all_label, _, time = test_eval(batch_size, mirror_image, band, total_pos_all, image_size, near_band)
 
-    train_result['times'] = time
+    # train_result['times'] = time
     # all_label = all_label.reshape(TR.shape[0], TR.shape[1])
     # save_loc = "ss1d_save_npy/" + dataset_name + "_ss1d.pred"
     # save_path_pred = "%s.npy" % save_loc
