@@ -243,18 +243,18 @@ def train_epoch(train_loader, valid_loader, criterion, lr_optimizer, optimizer, 
                 oa_range = 0
                 aa_range = 0
                 kappa_range = 0
-                if dataset_name == "Indian":
-                    oa_range = (60.14 - 5.04, 60.14 + 5.04)
-                    aa_range = (73.81 - 3.36, 73.81 + 3.36)
-                    kappa_range = (55.64 - 5.48, 55.64 + 5.48)
-                if dataset_name == "Pavia":
-                    oa_range = (71.71 - 1.39, 71.71 + 1.39)
-                    aa_range = (75.58 - 1.49, 75.58 + 1.49)
-                    kappa_range = (63.82 - 1.64, 63.82 + 1.64)
-                if dataset_name == "Honghu":
-                    oa_range = (74.88 - 4.45, 74.88 + 4.45)
-                    aa_range = (70.50 - 2.80, 70.50 + 2.80)
-                    kappa_range = (69.45 - 5.01, 69.45 + 5.01)
+                # if dataset_name == "Indian":
+                #     oa_range = (60.14 - 5.04, 60.14 + 5.04)
+                #     aa_range = (73.81 - 3.36, 73.81 + 3.36)
+                #     kappa_range = (55.64 - 5.48, 55.64 + 5.48)
+                # if dataset_name == "Pavia":
+                #     oa_range = (71.71 - 1.39, 71.71 + 1.39)
+                #     aa_range = (75.58 - 1.49, 75.58 + 1.49)
+                #     kappa_range = (63.82 - 1.64, 63.82 + 1.64)
+                # if dataset_name == "Honghu":
+                #     oa_range = (74.88 - 4.45, 74.88 + 4.45)
+                #     aa_range = (70.50 - 2.80, 70.50 + 2.80)
+                #     kappa_range = (69.45 - 5.01, 69.45 + 5.01)
                 # if not oa_range[0] < OA2 * 100 < oa_range[1] or not aa_range[0] < AA_mean2 * 100 < aa_range[1] or not kappa_range[0] < Kappa2 * 100 < kappa_range[1]:
                 #     return False
                 res = {
@@ -346,7 +346,7 @@ np.random.seed(args.seed)
 torch.manual_seed(args.seed)
 torch.cuda.manual_seed(args.seed)
 cudnn.deterministic = True
-cudnn.benchmark = False
+cudnn.benchmark = True
 
 mat_file = "{}_{}_split.mat".format(dataset_name, train_num)
 if result_file_exists('./data/{}'.format(dataset_name), mat_file):
@@ -398,11 +398,11 @@ Label_train = Data.TensorDataset(x_train, y_train)
 label_test_loader = Data.DataLoader(Label_test, batch_size=batch_size, shuffle=True, num_workers=0)
 label_train_loader = Data.DataLoader(Label_train, batch_size=batch_size, shuffle=False, num_workers=0)
 
-while True:
-    """uniq_name = "{}_{}_{}_ss1d.json".format(dataset_name, train_num, times)
-    if result_file_exists('./save_path', uniq_name):
+for train_times in range(train_time):
+    uniq_name = "{}_{}_{}_ss1d.json".format(dataset_name, int(train_num), train_times)
+    if result_file_exists('./save_path/', uniq_name):
         print('%s has been run. skip...' % uniq_name)
-        continue"""
+        continue
     # print("begin training {}".format(uniq_name))
     model = SwinT(image_size=image_size, near_band=near_band, num_patches=band,
                   patch_dim=near_band * image_size ** 2, num_classes=num_classes, band=band, dim=64,
@@ -428,16 +428,17 @@ while True:
 
     total_pos_all = np.concatenate((lengths, rows), axis=1)
 
-    all_label, _, time = test_eval(batch_size, mirror_image, band, total_pos_all, image_size, near_band)
+    # all_label, _, time = test_eval(batch_size, mirror_image, band, total_pos_all, image_size, near_band)
 
     train_result['times'] = time
-    all_label = all_label.reshape(TR.shape[0], TR.shape[1])
-    save_loc = "ss1d_save_npy/" + dataset_name + "_ss1d.pred"
-    save_path_pred = "%s.npy" % save_loc
-    np.save(save_path_pred, all_label)
-    del all_label, model
+    # all_label = all_label.reshape(TR.shape[0], TR.shape[1])
+    # save_loc = "ss1d_save_npy/" + dataset_name + "_ss1d.pred"
+    # save_path_pred = "%s.npy" % save_loc
+    # np.save(save_path_pred, all_label)
+    # del all_label
+    del model
 
-    save_loc = path + dataset_name + "_" + str(train_num) + "_ss1d"
+    save_loc = path + dataset_name + "_" + str(int(train_num)) + "_" + str(train_times) + "_ss1d"
     save_path_json = "%s.json" % save_loc
     ss = json.dumps(train_result, indent=4)
     with open(save_path_json, 'w') as fout:
@@ -445,4 +446,4 @@ while True:
         fout.flush()
     print("save record of %s done!" % save_loc)
 
-    break
+    # break
